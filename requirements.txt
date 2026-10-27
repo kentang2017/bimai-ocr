@@ -1,0 +1,13 @@
+# 執行環境 / runtime
+pillow>=10.0
+# 推論引擎（非 pip 套件；請自行編譯 llama.cpp 或用官方 release）
+# llama.cpp >= b4000 with vision (mmproj) support
+#   https://github.com/ggml-org/llama.cpp
+
+# 訓練用（選用）/ training extras
+# torch>=2.4
+# transformers>=5.0
+# peft>=0.13
+# trl>=0.12
+# datasets>=3.0
+# unsloth>=2024.10
