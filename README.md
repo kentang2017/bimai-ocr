@@ -9,14 +9,18 @@
 <sub>瀏覽器工作台 ＋ 命令列，接上 llama.cpp 的視覺語言模型（Qwen3-VL-8B 草書微調版）</sub>
 
 [![Model](https://img.shields.io/badge/model-HuggingFace%20BiMai--Chaoshu--OCR-ff9d00?logo=huggingface&logoColor=white)](https://huggingface.co/kinyeah/BiMai-Chaoshu-OCR)
+[![Ollama](https://img.shields.io/badge/ollama-bimai--chaoshu--ocr--v23-000000)](https://ollama.com/kinyeah/bimai-chaoshu-ocr-v23)
 [![Runtime](https://img.shields.io/badge/runtime-llama.cpp-2f6f4e)](https://github.com/ggml-org/llama.cpp)
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![Licence](https://img.shields.io/badge/licence-MIT-1f6feb)](LICENSE)
 
-| 基準（40 欄、331 字、無污染） | 原版 Qwen3-VL-8B | **筆脈 v16** | 改善 |
-|:--|:--:|:--:|:--:|
-| 字準 Accuracy | 64.4% | **72.2%** | **+7.8 pt** |
-| **錯字率 CER** | 35.6% | **27.8%** | **−21.9%（相對）** |
+| 基準（40 欄、331 字、無污染） | 原版 Qwen3-VL-8B | 筆脈 v16 | **筆脈 v23** | **生產定版（v23＋精修）** |
+|:--|:--:|:--:|:--:|:--:|
+| 字準 accuracy | 64.4% | 72.2% | 72.5% | **72.5%** |
+| **錯字率 CER** | 35.6% | 27.8% | 27.5% | **26.9%** |
+| 相對改善 | — | −21.9% | −22.7% | **−24.4%** |
+
+> 生產定版 = `caoshu-v23` LoRA（模型層 CER 27.5%）＋ **迭代精修**（推理層再降 0.6pt）。
 
 </div>
 
@@ -24,20 +28,38 @@
 
 ## ⚡ 30 秒上手 · Quick Start
 
+### 方式 A · Ollama（最省事）
+
+```bash
+# 家裡電腦／任何機器
+ollama run kinyeah/bimai-chaoshu-ocr-v23 \
+    "只根據圖中可見筆畫逐字釋讀。只輸出繁體字。 C:/Users/you/Desktop/column.jpg"
+#  1) 圖片路徑放在提示文字裡（Ollama 無 --image 旗標）
+#  2) 模型 6.5 GB，第一次 pull 需一分多鐘
+```
+
+### 方式 B · 本專案工作台
+
 ```bash
 # 1) 取得本專案
 git clone <本 repo> && cd BiMai-Chaoshu-OCR
 pip install -r requirements.txt          # 只需 Pillow
 
-# 2) 到 HuggingFace 下載模型（兩個檔案）
+# 2) 到 HuggingFace 下載模型（推薦三個檔案）
 #    https://huggingface.co/kinyeah/BiMai-Chaoshu-OCR
-#    caoshu-v16-merged-Q4_K_M.gguf       4.7 GB
-#    caoshu-v16-merged-mmproj-F16.gguf   1.1 GB
+#    Qwen3-VL-8B-Instruct-Q4_K_M.gguf     4.7 GB  ← 基底（可從 unsloth/Qwen3-VL-8B-Instruct-GGUF 拿）
+#    caoshu-v23-lora-f16.gguf             349 MB  ← v23 LoRA adapter（本 repo 推薦）
+#    v16-merged-mmproj-F16.gguf           1.1 GB  ← 視覺投影器
 
-# 3) 啟動推論引擎（單檔，免 --lora）
-llama-server -m models/caoshu-v16-merged-Q4_K_M.gguf \
-  --mmproj models/caoshu-v16-merged-mmproj-F16.gguf \
-  --host 127.0.0.1 --port 8800 --ctx-size 8192 --jinja
+#    （不想用 LoRA 也可以用已合併的單檔版本）
+#    caoshu-v23-merged-Q4_K_M.gguf        4.8 GB
+
+# 3) 啟動推論引擎
+llama-server -m models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf \
+  --mmproj models/v16-merged-mmproj-F16.gguf \
+  --lora  models/caoshu-v23-lora-f16.gguf \
+  --host 127.0.0.1 --port 8800 --jinja
+#    （或者用已合併單檔：llama-server -m models/caoshu-v23-merged-Q4_K_M.gguf --mmproj models/v16-merged-mmproj-F16.gguf ...）
 
 # 4) 開工作台
 python3 -m mochiocr.gui --port 8810
@@ -46,6 +68,27 @@ python3 -m mochiocr.gui --port 8810
 
 > 需要 [llama.cpp](https://github.com/ggml-org/llama.cpp)（含多模態 mmproj 支援，自行編譯或用官方 release）。
 > 書影放在別的位置時：`BIMAI_ROOT=/data/books python3 -m mochiocr.gui --port 8810`
+
+---
+
+## 🎨 迭代精修 · 迭代修正（推理層 CER −0.6pt）
+
+工作台辨識時**每欄自動跑兩輪**（生產定版 CER 26.9%）：
+
+```python
+# 第一輪：一般 OCR
+t1 = llm(image, "只根據圖中可見筆畫逐字釋讀。禁止默寫唐詩或名帖全文。只輸出你確實看見的繁體字。")
+
+# 第二輪：把第一輪的猜測回饋給模型 → 自我修正
+refine = (f"你之前釋讀為「{t1}」。請再次仔細看圖，"
+          f"逐一對照筆畫，修正錯誤。只輸出修正後的繁體字。")
+t2 = llm(image, refine)
+
+# 選長度合理的那條（若第二輪被截斷則回退第一輪）
+final = t2 if len(t2) >= 0.8 * len(t1) else t1
+```
+
+效果：CER **27.5% → 26.9%**。每欄多花 ~5 秒，可關閉（`no_alts=True`）。
 
 ---
 
@@ -93,14 +136,13 @@ GPU 上約 **1 秒／欄**，一頁 10 欄約 10–30 秒。
 基準 `gold_test40`：40 欄手工核對、331 字、**無污染**（訓練流程內建守門，洩漏必須為 0）。
 量測：貪婪解碼（`temperature=0`）、同一提示詞、同一裁切圖、LCS 逐欄 CER。
 
-| 模型 | 字準 | **CER** | 逐欄中位 | ≥80% 欄 | <50% 欄 |
-|:--|--:|--:|--:|:--:|:--:|
-| 原版 `Qwen3-VL-8B-Instruct`（無 LoRA） | 64.4% | 35.6% | 65.2 | 9 / 40 | 9 / 40 |
-| 筆脈 v8（首次微調） | 65.3% | 34.7% | — | — | — |
-| **筆脈 v16（本專案採用）** | **72.2%** | **27.8%** | **75.0** | **13 / 40** | **4 / 40** |
-
-> 微調把**錯字率從 35.6% 壓到 27.8%**（相對 −21.9%）；讀得很差的欄位由 9 欄降到 4 欄。
-> 改善集中在**生僻字與連筆字**，並抑制原版「默寫名帖／跳字成句」的傾向。
+| 模型 | 字準 | **CER** | 說明 |
+|:--|--:|--:|:--|
+| 原版 `Qwen3-VL-8B-Instruct`（無 LoRA） | 64.4% | 35.6% | 常默寫名帖／跳字 |
+| 筆脈 v8（首次微調） | 65.3% | 34.7% | 1,215 列 |
+| 筆脈 v16（v23 之前的定版） | 72.2% | 27.8% | 2,708 列真跡 |
+| **筆脈 v23（本 repo 生產）** | **72.5%** | **27.5%** | 4,855 列（真跡 + 字體合成 + TTF 字形對） |
+| **v23 ＋ 迭代精修（生產定版）** | **72.5%** | **26.9%** | 推理層再加 0.6pt |
 
 <details>
 <summary><b>🔬 深入：候選集上界（oracle）與為什麼要人工挑選</b></summary>
@@ -137,10 +179,12 @@ GPU 上約 **1 秒／欄**，一頁 10 欄約 10–30 秒。
 Qwen3-VL-8B + 草書 LoRA（llama.cpp，ocrclient.py）
    │
    ▼
-逐欄文字 ── 組稿（assemble.py）──▶ 校對工作台 / TXT
+第一輪辨識 ──▶ 迭代精修（2-pass 自修正）──▶ 逐欄文字
+   ▼
+校對工作台 / TXT / 匯出
 ```
 
-**為什麼要切成單欄？** 整頁直接餵給模型，模型容易「默寫名帖全文」或跳行漏字；
+**為什麼要切成單欄？** 整頁直接餵給模型，模型容易「默寫名帖全文」或跳行漏字。
 一欄一條是最穩定的粒度，也讓錯誤可定位、可校對。
 
 ---
@@ -164,7 +208,7 @@ python3 -m mochiocr serve --check
 
 ```
 mochiocr/
-├─ gui.py          網頁工作台（:8810）— 逐欄校對、替代讀法、待校標記、匯出
+├─ gui.py          網頁工作台（:8810）— 逐欄校對、替代讀法、迭代精修、匯出
 ├─ cli.py          命令列：pdf2text / serve
 ├─ segment.py      直列偵測（投影法、切分、跨欄處理）
 ├─ pdfrender.py    PDF → 頁面圖
@@ -219,16 +263,22 @@ mochiocr/
 and calligraphy into editable text, using a QLoRA-finetuned **Qwen3-VL-8B** served by llama.cpp.
 
 **Model weights → [kinyeah/BiMai-Chaoshu-OCR](https://huggingface.co/kinyeah/BiMai-Chaoshu-OCR)**
-(recommended: `caoshu-v16-merged-Q4_K_M.gguf` + `caoshu-v16-merged-mmproj-F16.gguf`).
+(recommended: `Qwen3-VL-8B-Instruct-Q4_K_M.gguf` + `v16-merged-mmproj-F16.gguf` + `caoshu-v23-lora-f16.gguf`).
 
-**Results** on a clean 40-column holdout: **72.2% character accuracy / 27.8% CER**
-vs 64.4% / 35.6% for the un-finetuned base model — a **21.9% relative CER reduction**.
+**Results** on a clean 40-column holdout:
+| Model | Accuracy | CER |
+|:--|--:|--:|
+| base Qwen3-VL-8B | 64.4% | 35.6% |
+| BiMai v16 | 72.2% | 27.8% |
+| **BiMai v23** (LoRA + 1,937 augmented rows) | **72.5%** | **27.5%** |
+| **v23 + 2-pass self-refinement** (production) | **72.5%** | **26.9%** |
 
 **Run**
 ```bash
-llama-server -m models/caoshu-v16-merged-Q4_K_M.gguf \
-  --mmproj models/caoshu-v16-merged-mmproj-F16.gguf \
-  --host 127.0.0.1 --port 8800 --ctx-size 8192 --jinja
+llama-server -m models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf \
+  --mmproj models/v16-merged-mmproj-F16.gguf \
+  --lora  models/caoshu-v23-lora-f16.gguf \
+  --host 127.0.0.1 --port 8800 --jinja
 python3 -m mochiocr.gui --port 8810    # open http://127.0.0.1:8810
 ```
 
